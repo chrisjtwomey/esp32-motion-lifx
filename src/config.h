@@ -1,37 +1,19 @@
-#include <Inkplate.h>
 #include <MqttLogger.h>
 #include <NTPClient.h>
 #include <PubSubClient.h>
-#include <SdFat.h>
 #include <TimeLib.h>
 #include <WiFi.h>
+#include <IPAddress.h>
 #include <WiFiUdp.h>
-#include <driver/rtc_io.h>
-#include <esp_adc_cal.h>
-#include <rom/rtc.h>
+#include "ArduinoLifx.h"
+#include <NewPing.h>
 
 #define WIFI_SSID "XXXX"  // replace with your WiFi SSID
 #define WIFI_PASS "XXXX"  // replace with your WiFi password
 #define MAX_RETRIES 3     // max times to retry connection
 
-#ifndef IMAGE_HOST
-#define IMAGE_HOST "localhost"  // the image host
-#endif
-
-#ifndef IMAGE_HOST_PORT
-#define IMAGE_HOST_PORT 8080
-#endif
-
-#ifndef IMAGE_HOST_PATH
-#define IMAGE_HOST_PATH "/calendar.png"
-#endif
-
-#ifndef DAILY_WAKE_TIME
-#define DAILY_WAKE_TIME "07:00:00"  // the time everyday to refresh
-#endif
-
 #ifndef NTP_HOST
-#define NTP_HOST "europe.pool.ntp.org"
+#define NTP_HOST "pool.ntp.org"
 #endif
 #ifndef GMT_OFFSET
 #define GMT_OFFSET 0  // +X timezone (eg. GMT+1)
@@ -45,9 +27,9 @@
 #define MQTT_PORT 1883
 #endif
 #ifndef MQTT_CLIENT_ID
-#define MQTT_CLIENT_ID "eink-cal-client"
+#define MQTT_CLIENT_ID "esp32-lifx-motion"
 #endif
-#define MQTT_TOPIC "mqtt/eink-cal-client"
+#define MQTT_TOPIC "mqtt/esp32-lifx-motion"
 
 #define LOG_CRIT 0
 #define LOG_ERROR 1
@@ -60,14 +42,12 @@
 #define LOG_LEVEL LOG_INFO
 #endif
 
-// inkplate10 board driver
-Inkplate display(INKPLATE_3BIT);
+WiFiUDP udp;
+ArduinoLifx lifx(udp);
+NTPClient timeClient(udp, NTP_HOST, GMT_OFFSET * 60 * 60, 60000);
 
-WiFiUDP udpClient;
-NTPClient timeClient(udpClient, NTP_HOST, GMT_OFFSET * 60 * 60, 60000);
-
-WiFiClient wifiClient;
-PubSubClient mqttClient(wifiClient);
+WiFiClient wifi;
+PubSubClient mqttClient(wifi);
 MqttLogger mqttLogger(mqttClient, MQTT_TOPIC, MqttLoggerMode::MqttAndSerial);
 
 const char* fmtTime(uint32_t t) {
@@ -78,7 +58,6 @@ const char* fmtTime(uint32_t t) {
 }
 
 const char* msgPrefix(uint16_t pri) {
-    display.rtcGetRtcData();
     char* priority;
 
     switch (pri) {
@@ -106,7 +85,7 @@ const char* msgPrefix(uint16_t pri) {
     }
 
     char* prefix = new char[35];
-    sprintf(prefix, "%s - %s - ", fmtTime(display.rtcGetEpoch()), priority);
+    sprintf(prefix, "%s - %s - ", fmtTime(now()), priority);
     return prefix;
 }
 
@@ -144,50 +123,9 @@ void logf(uint16_t pri, const char* fmt, ...) {
     va_end(args);
 }
 
-// getCalibratedBatteryVoltage returns the battery voltage by a calibrated ADC
-float getCalibratedBatteryVoltage() {
-    // calibration factor - adjust until correlates with actual readings
-    float calibration = 2.140;
-    // default voltage reference for esp32
-    float vref = 1100;
-
-    // get characterized voltage reference
-    esp_adc_cal_characteristics_t adc_chars;
-    esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_11, ADC_WIDTH_BIT_12,
-                             vref, &adc_chars);
-    vref = adc_chars.vref;
-
-    uint8_t mcpRegsInt[22];
-    display.pinModeInternal(MCP23017_INT_ADDR, mcpRegsInt, 9, INPUT);
-    int state = display.digitalReadInternal(MCP23017_INT_ADDR, mcpRegsInt, 9);
-    display.pinModeInternal(MCP23017_INT_ADDR, mcpRegsInt, 9, OUTPUT);
-
-    if (state) {
-        display.digitalWriteInternal(MCP23017_INT_ADDR, mcpRegsInt, 9, LOW);
-    } else {
-        display.digitalWriteInternal(MCP23017_INT_ADDR, mcpRegsInt, 9, HIGH);
-    }
-
-    delay(1);
-    int adc = analogRead(35);
-    if (state) {
-        display.pinModeInternal(MCP23017_INT_ADDR, mcpRegsInt, 9, INPUT);
-    } else {
-        display.digitalWriteInternal(MCP23017_INT_ADDR, mcpRegsInt, 9, LOW);
-    }
-
-    return (adc / 4095.0) * 3.3 * (1100 / vref) * calibration;
-}
-
-// isVbusPresent returns whether the board is being powered by USB
-bool isVbusPresent() {
-    // TODO: determine USB power?
-    return false;
-}
-
 void setup();
+bool is_motion_detected();
+bool is_ultrasonic_detected();
+unsigned long us_get_distance_cm();
+void wait_before_exit();
 void sleep();
-time_t getWakeTime();
-void displayError(const char* msg);
-void displayImage(const char* filePath);
-void downloadImage(const char* url, const char* filePath);
