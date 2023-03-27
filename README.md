@@ -1,4 +1,5 @@
 # esp32-motion-lifx
+<img src="https://user-images.githubusercontent.com/5797356/228050682-a115b179-6cc1-4c6b-8481-9c3eaa0500ed.jpg" width=400 height=400 />
 
 Motion-activated LIFX lights with PIR/Ultrasonic sensors and a esp32 microcontroller.
 
